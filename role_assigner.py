@@ -55,10 +55,11 @@ class RoleAssigner(commands.Cog):
             url=title_url,
         )
         # Placing thumbnails on the embed
-        if isinstance(thumbnail, discord.file.File):
-            embed.set_thumbnail(url=f"attachment://{thumbnail.filename}")
-        else:
-            embed.set_thumbnail(url=thumbnail)
+        if thumbnail:
+            if isinstance(thumbnail, discord.file.File):
+                embed.set_thumbnail(url=f"attachment://{thumbnail.filename}")
+            else:
+                embed.set_thumbnail(url=thumbnail)
 
         if author_name:
             if isinstance(author_icon, discord.file.File):
@@ -83,8 +84,10 @@ class RoleAssigner(commands.Cog):
                 )
             else:
                 embed.set_footer(text=footer_text, icon_url=footer_icon)
+
         if entries:
             embed = await self.gen_entries(embed, entries)
+
         return embed
 
     async def apply_reactions(
@@ -119,8 +122,6 @@ class RoleAssigner(commands.Cog):
             for entry in entries:
 
                 if entries[entry].emoji_id == payload.emoji.id:
-                    print(entries[entry].emoji_id)
-
                     role = guild.get_role(entries[entry].role_id)
 
                     if role not in payload.member.roles:
@@ -161,6 +162,7 @@ class RoleAssigner(commands.Cog):
                     file_loc = os.path.dirname(__file__)
                     file = File(f"{file_loc}/assets/{thumbnail}", thumbnail)
 
+                    logger.debug(file)
                     embed = await self.assemble_message(
                         title=message,
                         title_url=self.config.messages[message].title_url,
@@ -186,7 +188,6 @@ class RoleAssigner(commands.Cog):
                         logger.info(f"No message found. Creating one for {message}")
                         self.config.messages[message].message_id = 0
                         created_message = await channel.send(embed=embed, file=file)
-
                 else:
                     embed = await self.assemble_message(
                         title=message,
@@ -209,27 +210,25 @@ class RoleAssigner(commands.Cog):
                             self.config.messages[message].message_id
                         )
                         await created_message.edit(embed=embed, attachments=[])
+
                     except discord.errors.NotFound:
                         logger.info(f"No message found. Creating one for {message}")
                         self.config.messages[message].message_id = 0
+
                         created_message = await channel.send(embed=embed)
 
                 if not self.config.messages[message].message_id:
                     self.config.messages[message].message_id = created_message.id
                     write_config(self.config)
 
-                await self.apply_reactions(
-                    created_message, self.config.messages[message].entries, guild
-                )
+                if self.config.messages[message].entries:
+                    await self.apply_reactions(
+                        created_message, self.config.messages[message].entries, guild
+                    )
 
             except discord.errors.HTTPException as e:
                 logger.error(
                     f'There is an invalid URL in your "{message}" block. Please fix potentially wrong URLs. Remember links have to start with http or https. Exact error message: {str(e)}'
-                )
-                continue
-            except toml.decoder.TomlDecodeError as e:
-                logger.error(
-                    f'Your config.toml has invalid syntax! Please resolve the following error: "{str(e)}"'
                 )
                 continue
             except ValueError as e:
@@ -238,8 +237,9 @@ class RoleAssigner(commands.Cog):
                         f'Color attribute has been set wrongly for the "{message}" message block. Only use Hex values e.g FFFFFF or 000000. Exact error message: {str(e)}'
                     )
                 continue
+
             except Exception as e:
-                logger.error(
+                logger.exception(
                     f'Unhandeled Error occured. Please report with this message: "{e}"'
                 )
                 continue

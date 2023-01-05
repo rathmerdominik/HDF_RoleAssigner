@@ -27,8 +27,8 @@ class Message(BaseModel):
     description: Optional[str]
     color: Optional[str]
     thumbnail: Optional[str]
-    author: Optional[Author]
-    footer: Optional[Footer]
+    author: Author
+    footer: Footer
 
     entries: Optional[Dict[str, Entry]]
 
