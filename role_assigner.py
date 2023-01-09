@@ -29,7 +29,7 @@ class RoleAssigner(commands.Cog):
     async def gen_entries(self, embed: Embed, entries: Dict[str, Entry]) -> Embed:
 
         for entry in entries.keys():
-            embed.add_field(name=entry, value=entries[entry].description, inline=False)
+            embed.add_field(name=entries[entry].title, value=entries[entry].description, inline=False)
 
         return embed
 
@@ -54,7 +54,7 @@ class RoleAssigner(commands.Cog):
             color=int(color, 16),
             url=title_url,
         )
-        # Placing thumbnails on the embed
+        
         if thumbnail:
             if isinstance(thumbnail, discord.file.File):
                 embed.set_thumbnail(url=f"attachment://{thumbnail.filename}")
@@ -164,7 +164,7 @@ class RoleAssigner(commands.Cog):
 
                     logger.debug(file)
                     embed = await self.assemble_message(
-                        title=message,
+                        title=self.config.messages[message].title,
                         title_url=self.config.messages[message].title_url,
                         description=self.config.messages[message].description,
                         thumbnail=file,
@@ -190,7 +190,7 @@ class RoleAssigner(commands.Cog):
                         created_message = await channel.send(embed=embed, file=file)
                 else:
                     embed = await self.assemble_message(
-                        title=message,
+                        title=self.config.messages[message].title,
                         title_url=self.config.messages[message].title_url,
                         description=self.config.messages[message].description,
                         thumbnail=thumbnail,

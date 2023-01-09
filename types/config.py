@@ -15,12 +15,14 @@ class Author(BaseModel):
 
 
 class Entry(BaseModel):
+    title: Optional[str]
     role_id: Optional[int]
     emoji_id: Optional[Union[int, str]]
     description: Optional[str]
 
 
 class Message(BaseModel):
+    title: str
     channel_id: int
     message_id: int
     title_url: Optional[str]
