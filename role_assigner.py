@@ -4,6 +4,7 @@ import logging
 
 import discord
 from discord import Embed, File
+from discord.ui import View, Button
 from discord.ext import commands
 
 from typing import Dict, Union, List
@@ -26,10 +27,24 @@ class RoleAssigner(commands.Cog):
         file_loc = os.path.dirname(__file__)
         return File(f"{file_loc}/assets/{url}", url)
 
+    async def gen_file_if_needed(self, url_str: str) -> Union[File, str]:
+        if url_str and not url_str.startswith(("http://", "https://")):
+            return await self.get_file_from_str(url_str)
+        return url_str
+
     async def gen_entries(self, embed: Embed, entries: Dict[str, Entry]) -> Embed:
 
         for entry in entries.keys():
-            embed.add_field(name=entries[entry].title, value=entries[entry].description, inline=False)
+            emoji = entries[entry].emoji_id
+            if isinstance(entries[entry].emoji_id, int):
+                guild = self.bot.get_guild(self.config.guild_id)
+                emoji = await guild.fetch_emoji(entries[entry].emoji_id)
+
+            embed.add_field(
+                name=entries[entry].title,
+                value=entries[entry].description,
+                inline=False,
+            )
 
         return embed
 
@@ -41,10 +56,10 @@ class RoleAssigner(commands.Cog):
         thumbnail: Union[File, str] = None,
         color: str = None,
         author_name: str = None,
-        author_icon: str = None,
+        author_icon: Union[File, str] = None,
         author_link: str = None,
         footer_text: str = None,
-        footer_icon: str = None,
+        footer_icon: Union[File, str] = None,
         entries: Dict[str, Entry] = None,
     ) -> Embed:
 
@@ -54,16 +69,15 @@ class RoleAssigner(commands.Cog):
             color=int(color, 16),
             url=title_url,
         )
-        
+
         if thumbnail:
-            if isinstance(thumbnail, discord.file.File):
+            if isinstance(thumbnail, File):
                 embed.set_thumbnail(url=f"attachment://{thumbnail.filename}")
             else:
                 embed.set_thumbnail(url=thumbnail)
 
         if author_name:
             if isinstance(author_icon, discord.file.File):
-                author_icon = await self.get_file_from_str(author_icon)
                 embed.set_author(
                     name=author_name,
                     url=author_link,
@@ -77,8 +91,7 @@ class RoleAssigner(commands.Cog):
                 )
 
         if footer_text:
-            if isinstance(footer_icon, discord.file.File):
-                footer_icon = await self.get_file_from_str(footer_icon)
+            if isinstance(footer_icon, File):
                 embed.set_footer(
                     text=footer_text, icon_url=f"attachment://{footer_icon.filename}"
                 )
@@ -90,53 +103,50 @@ class RoleAssigner(commands.Cog):
 
         return embed
 
-    async def apply_reactions(
+    async def generate_buttons(
         self,
-        message: discord.Message,
         entries: List[Dict[str, Entry]],
         guild: discord.Guild,
-    ):
-        applied_reactions = message.reactions
+    ) -> View:
+
+        view = View()
 
         for entry in entries:
             emoji = entries[entry].emoji_id
-
-            if emoji in applied_reactions:
+            if not emoji:
                 continue
 
             if not isinstance(emoji, str):
                 emoji = await guild.fetch_emoji(entries[entry].emoji_id)
 
-            await message.add_reaction(emoji)
+            view.add_item(
+                Button(
+                    label=entries[entry].title,
+                    emoji=emoji,
+                    custom_id=f"{entries[entry].role_id}",
+                )
+            )
+
+        return view
 
     @commands.Cog.listener()
-    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
-        messages: Message = self.config.messages
-        guild = self.bot.get_guild(payload.guild_id)
+    async def on_interaction(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        role_id = int(interaction.data["custom_id"])
+        role = guild.get_role(role_id)
 
-        for message in messages.keys():
-            if not messages[message].message_id == payload.message_id:
-                continue
+        if role not in interaction.user.roles:
+            await interaction.user.add_roles(role, reason="Added by RoleAssigner")
+            await interaction.response.send_message(
+                f'Successfully added you to "{role.name}" group!', ephemeral=True
+            )
 
-            entries: List[Dict[str, Entry]] = messages[message].entries
-            for entry in entries:
-
-                if entries[entry].emoji_id == payload.emoji.id:
-                    role = guild.get_role(entries[entry].role_id)
-
-                    if role not in payload.member.roles:
-                        await payload.member.add_roles(
-                            role, reason="Added by RoleAssigner"
-                        )
-
-                    elif self.config.remove_role_when_owned:
-                        await payload.member.remove_roles(
-                            role, reason="Removed by RoleAssigner"
-                        )
-
-        channel = await guild.fetch_channel(payload.channel_id)
-        message = await channel.fetch_message(payload.message_id)
-        await message.remove_reaction(payload.emoji, payload.member)
+        elif self.config.remove_role_when_owned:
+            await interaction.user.remove_roles(role, reason="Removed by RoleAssigner")
+            await interaction.response.send_message(
+                f'Successfully removed you from the "{role.name}" group!',
+                ephemeral=True,
+            )
 
     @commands.Cog.listener()
     async def on_ready(self):
@@ -145,7 +155,15 @@ class RoleAssigner(commands.Cog):
 
         for message in self.config.messages.keys():
             try:
-                channel = guild.get_channel(self.config.messages[message].channel_id)
+                try:
+                    channel = guild.get_channel(
+                        self.config.messages[message].channel_id
+                    )
+                except AttributeError:
+                    logger.error(
+                        "You forgot to set a guild ID. Please set it in the config.toml file"
+                    )
+                    return
 
                 if not channel:
                     logger.error(
@@ -153,84 +171,66 @@ class RoleAssigner(commands.Cog):
                     )
                     return
 
-                thumbnail = self.config.messages[message].thumbnail
+                thumbnail = await self.gen_file_if_needed(
+                    self.config.messages[message].thumbnail
+                )
+                author_icon = await self.gen_file_if_needed(
+                    self.config.messages[message].author.icon
+                )
+                footer_icon = await self.gen_file_if_needed(
+                    self.config.messages[message].footer.icon_url
+                )
 
-                # TODO this entire block may have to be optimized. I haven't found a better way yet. But this cant be it... Problem lies with discord sending files
-                logger.debug(thumbnail)
-                if thumbnail and not thumbnail.startswith(("http://", "https://")):
+                files = []
+                if isinstance(thumbnail, File):
+                    files.append(thumbnail)
+                if isinstance(author_icon, File):
+                    files.append(author_icon)
+                if isinstance(footer_icon, File):
+                    files.append(footer_icon)
 
-                    file_loc = os.path.dirname(__file__)
-                    file = File(f"{file_loc}/assets/{thumbnail}", thumbnail)
+                embed = await self.assemble_message(
+                    title=self.config.messages[message].title,
+                    title_url=self.config.messages[message].title_url,
+                    description=self.config.messages[message].description,
+                    thumbnail=thumbnail,
+                    color=self.config.messages[message].color,
+                    author_name=self.config.messages[message].author.name,
+                    author_icon=author_icon,
+                    author_link=self.config.messages[message].author.url,
+                    footer_text=self.config.messages[message].footer.text,
+                    footer_icon=footer_icon,
+                    entries=self.config.messages[message].entries,
+                )
 
-                    logger.debug(file)
-                    embed = await self.assemble_message(
-                        title=self.config.messages[message].title,
-                        title_url=self.config.messages[message].title_url,
-                        description=self.config.messages[message].description,
-                        thumbnail=file,
-                        color=self.config.messages[message].color,
-                        author_name=self.config.messages[message].author.name,
-                        author_icon=self.config.messages[message].author.icon,
-                        author_link=self.config.messages[message].author.url,
-                        footer_text=self.config.messages[message].footer.text,
-                        footer_icon=self.config.messages[message].footer.icon_url,
-                        entries=self.config.messages[message].entries,
-                    )
-                    # TODO this just cant be the correct solution. Find a better way than this
-
-                    try:
-                        created_message = await channel.fetch_message(
-                            self.config.messages[message].message_id
-                        )
-                        await created_message.edit(embed=embed, attachments=[file])
-
-                    except discord.errors.NotFound:
-                        logger.info(f"No message found. Creating one for {message}")
-                        self.config.messages[message].message_id = 0
-                        created_message = await channel.send(embed=embed, file=file)
-                else:
-                    embed = await self.assemble_message(
-                        title=self.config.messages[message].title,
-                        title_url=self.config.messages[message].title_url,
-                        description=self.config.messages[message].description,
-                        thumbnail=thumbnail,
-                        color=self.config.messages[message].color,
-                        author_name=self.config.messages[message].author.name,
-                        author_icon=self.config.messages[message].author.icon,
-                        author_link=self.config.messages[message].author.url,
-                        footer_text=self.config.messages[message].footer.text,
-                        footer_icon=self.config.messages[message].footer.icon_url,
-                        entries=self.config.messages[message].entries,
+                if self.config.messages[message].entries:
+                    buttons: View = await self.generate_buttons(
+                        self.config.messages[message].entries, guild
                     )
 
-                    # TODO this just cant be the correct solution. Find a better way than this
+                try:
+                    created_message = await channel.fetch_message(
+                        self.config.messages[message].message_id
+                    )
+                    await created_message.edit(
+                        embed=embed, attachments=files, view=buttons
+                    )
 
-                    try:
-                        created_message = await channel.fetch_message(
-                            self.config.messages[message].message_id
-                        )
-                        await created_message.edit(embed=embed, attachments=[])
-
-                    except discord.errors.NotFound:
-                        logger.info(f"No message found. Creating one for {message}")
-                        self.config.messages[message].message_id = 0
-
-                        created_message = await channel.send(embed=embed)
+                except discord.errors.NotFound:
+                    logger.info(f"No message found. Creating one for {message}")
+                    self.config.messages[message].message_id = 0
+                    created_message = await channel.send(embed=embed, files=files)
 
                 if not self.config.messages[message].message_id:
                     self.config.messages[message].message_id = created_message.id
                     write_config(self.config)
-
-                if self.config.messages[message].entries:
-                    await self.apply_reactions(
-                        created_message, self.config.messages[message].entries, guild
-                    )
 
             except discord.errors.HTTPException as e:
                 logger.error(
                     f'There is an invalid URL in your "{message}" block. Please fix potentially wrong URLs. Remember links have to start with http or https. Exact error message: {str(e)}'
                 )
                 continue
+
             except ValueError as e:
                 if "invalid literal for int()" in str(e):
                     logger.error(
