@@ -219,7 +219,9 @@ class RoleAssigner(commands.Cog):
                 except discord.errors.NotFound:
                     logger.info(f"No message found. Creating one for {message}")
                     self.config.messages[message].message_id = 0
-                    created_message = await channel.send(embed=embed, files=files)
+                    created_message = await channel.send(
+                        embed=embed, files=files, view=buttons
+                    )
 
                 if not self.config.messages[message].message_id:
                     self.config.messages[message].message_id = created_message.id
